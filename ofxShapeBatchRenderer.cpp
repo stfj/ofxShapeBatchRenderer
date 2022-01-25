@@ -1,6 +1,7 @@
 /***********************************************************************
  
  Copyright (C) 2011 by Zach Gage
+ Copyright (C) 2015-2022 Dan Rosser - Updated for Various Apps and Games - Used in Super Hexagon
  
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -28,21 +29,48 @@ ofxShapeBatchRenderer::ofxShapeBatchRenderer(SHAPEMODE_t mode, int _numObjectsPe
 {
 	numObjectsPerLayer	= _numObjectsPerLayer;
 	numLayers			= _numLayers;
-	
-	verts				= new float[numLayers*numObjectsPerLayer*(mode*3)];
+
+	verts				= new double[numLayers*numObjectsPerLayer*(mode*3)];
 	colors				= new unsigned char[numLayers*numObjectsPerLayer*(mode*4)]; //4 colors for each vertex.
 	numObjects			= new int[numLayers*numObjectsPerLayer];
+    numObjectsLast      = new int[numLayers*numObjectsPerLayer];
 	layerLineWidth		= new int[numLayers];
-	
-	for(int i=0;i<numLayers;i++)
+
+#if defined(USING_VBO)
+	meshes.reserve(numLayers);
+#endif
+
+	for(int i=0;i<numLayers*numObjectsPerLayer*(mode*3); i++) verts[i] = 0.0;
+	for(int i=0;i<numLayers*numObjectsPerLayer*(mode*4); i++) colors[i] = 0.0;
+	for(int i=0;i<numLayers*numObjectsPerLayer; i++) numObjects[i] = 0;
+	for(int i=0;i<numLayers*numObjectsPerLayer; i++) numObjectsLast[i] = 0;
+	for(int i=0;i<numLayers; i++) layerLineWidth[i] = 0;
+
+    for(int i=0;i<numLayers;i++) {
 		layerLineWidth[i] = 1;
+    }
+	setupLayer(numLayers);
 	
 	shapeMode			= mode;
 	
+	numCirclePts = 0;
 	setCircleResolution(22);
 	red=green=blue=alpha=255;
 	safeMode=true;
 	clear();
+}
+
+void ofxShapeBatchRenderer::setupLayer(int layer) {
+    for(int i=0;i<=layer;i++) {
+	#if defined(USING_VBO)
+	        ofVboMesh * mesh = new ofVboMesh();
+	        mesh->disableNormals();
+	        mesh->disableTextures();
+	        mesh->enableIndices();
+	        mesh->enableColors();
+	        meshes.push_back(mesh);
+	#endif
+    }
 }
 
 ofxShapeBatchRenderer::~ofxShapeBatchRenderer()
@@ -51,6 +79,17 @@ ofxShapeBatchRenderer::~ofxShapeBatchRenderer()
 	delete colors;
 	delete numObjects;
 	delete layerLineWidth;
+	#if defined(USING_VBO)
+		if(meshes.size() > 0) {
+			for (int i = meshes.size() - 1; i >= 0; i--) {
+				if (meshes[i] != nullptr) {
+					delete meshes[i];
+					meshes[i] = nullptr;
+				}
+			}
+		}
+	    meshes.clear();
+	#endif
 }
 
 //shapes --
@@ -62,25 +101,35 @@ bool ofxShapeBatchRenderer::addTriangle(ofPoint a, int aR, int aG, int aB, int a
 {
 	if(shapeMode!=SBR_TRIANGLE)
 	{
-		cerr<<"RENDER ERROR: Could not add triangle to ShapeBatchRender set up for lines!"<<endl;
+		ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Could not add triangle to ShapeBatchRender set up for lines!";
 		return false;
 	}
 	
 	if(numObjects[layer] >= numObjectsPerLayer)
 	{
-		cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer!";
 		return false;
 	}
 	
 	if(layer > numLayers)
 	{
-		cerr << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!";
 		return false;
 	}
 	
 	int layerOffset = layer * numObjectsPerLayer;
 	int vertexOffset = (layerOffset + numObjects[layer]) * (shapeMode*3);
 	int colorOffset = (layerOffset + numObjects[layer]) * (shapeMode*4);
+    
+	#if defined(USING_VBO)
+    meshes[layer]->addVertex(ofVec3f(a.x, a.y, a.z));
+    meshes[layer]->addVertex(ofVec3f(b.x, b.y, b.z));
+    meshes[layer]->addVertex(ofVec3f(c.x, c.y, c.z));
+    
+    meshes[layer]->addColor(ofColor(aR, aG, aB, aA));
+    meshes[layer]->addColor(ofColor(bR, bG, bB, bA));
+    meshes[layer]->addColor(ofColor(cR, cG, cB, cA));
+	#else
 		
 	//verticies ------------------------------------
 	verts[vertexOffset     ]	= a.x;
@@ -110,6 +159,7 @@ bool ofxShapeBatchRenderer::addTriangle(ofPoint a, int aR, int aG, int aB, int a
 	colors[colorOffset + 9 ]	= cG;
 	colors[colorOffset + 10]	= cB;
 	colors[colorOffset + 11]	= cA;
+	#endif
 	
 	numObjects[layer]++;
 	
@@ -123,25 +173,36 @@ bool ofxShapeBatchRenderer::addLine(ofPoint a, int aR, int aG, int aB, int aA, o
 {
 	if(shapeMode!=SBR_LINE)
 	{
-		cerr<<"RENDER ERROR: Could not add line to ShapeBatchRender set up for triangles!"<<endl;
+		ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Could not add line to ShapeBatchRender set up for triangles!";
 		return false;
 	}
 	
 	if(numObjects[layer] >= numObjectsPerLayer)
 	{
-		cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") <<  "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer!";
 		return false;
 	}
 	
 	if(layer > numLayers)
 	{
-		cerr << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") <<  "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!";
 		return false;
 	}
 	
 	int layerOffset = layer * numObjectsPerLayer;
 	int vertexOffset = (layerOffset + numObjects[layer]) * (shapeMode*3);
 	int colorOffset = (layerOffset + numObjects[layer]) * (shapeMode*4);
+    
+	#if defined(USING_VBO)
+    meshes[layer]->addVertex(ofVec3f(a.x, a.y, a.z));
+    meshes[layer]->addVertex(ofVec3f(b.x, b.y, b.z));
+    
+    meshes[layer]->addColor(ofColor(aR, aG, aB, aA));
+    meshes[layer]->addColor(ofColor(bR, bG, bB, bA));
+    
+    //meshes[layer]->enableIndices();
+    
+	#else
 	
 	//verticies ------------------------------------
 	verts[vertexOffset     ]	= a.x;
@@ -162,6 +223,7 @@ bool ofxShapeBatchRenderer::addLine(ofPoint a, int aR, int aG, int aB, int aA, o
 	colors[colorOffset + 5 ]	= bG;
 	colors[colorOffset + 6 ]	= bB;
 	colors[colorOffset + 7 ]	= bA;
+	#endif
 	
 	numObjects[layer]++;
 	
@@ -177,7 +239,7 @@ bool ofxShapeBatchRenderer::addElipse(float x, float y, float z, float w, float 
 {
 	if(layer > numLayers)
 	{
-		cerr << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!";
 		return false;
 	}
 	
@@ -195,7 +257,7 @@ bool ofxShapeBatchRenderer::addElipse(float x, float y, float z, float w, float 
 			
 			if(numObjects[layer] >= numObjectsPerLayer)
 			{
-				cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during circle addition"  << endl;
+				ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during circle addition";
 				return false;
 			}
 			
@@ -248,7 +310,7 @@ bool ofxShapeBatchRenderer::addElipse(float x, float y, float z, float w, float 
 			
 			if(numObjects[layer] >= numObjectsPerLayer)
 			{
-				cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during circle addition"  << endl;
+				ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during circle addition";
 				return false;
 			}
 			
@@ -311,7 +373,7 @@ bool ofxShapeBatchRenderer::addRect(float x, float y, float z, float w, float h,
 {
 	if(layer > numLayers)
 	{
-		cerr << "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!"  << endl;
+		ofLogError("ofxShapeBatchRenderer") <<  "RENDER ERROR: Bogus layer '" << layer << "'! Only " << numLayers << " layers compiled!";
 		return false;
 	}
 	
@@ -323,7 +385,7 @@ bool ofxShapeBatchRenderer::addRect(float x, float y, float z, float w, float h,
 	{
 		if(numObjects[layer]+4 >= numObjectsPerLayer)
 		{
-			cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during rect addition"  << endl;
+			ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during rect addition";
 			return false;
 		}
 		
@@ -413,7 +475,7 @@ bool ofxShapeBatchRenderer::addRect(float x, float y, float z, float w, float h,
 	{
 		if(numObjects[layer]+2 >= numObjectsPerLayer)
 		{
-			cerr << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during rect addition"  << endl;
+			ofLogError("ofxShapeBatchRenderer") << "RENDER ERROR: Layer " << layer << " over allocated! Max " << numObjectsPerLayer << " objects per layer! Ran out during rect addition";
 			return false;
 		}
 		
@@ -482,46 +544,72 @@ bool ofxShapeBatchRenderer::addRect(float x, float y, float z, float w, float h,
 }
 
 bool ofxShapeBatchRenderer::addCenteredRect(float x, float y, float z, float w, float h, int layer)
-{return addRect(x-w/2,y-h/2,z,w,h,layer);}
+{
+	return addRect(x-w/2,y-h/2,z,w,h,layer);
+}
 
 //functions --
 
 
 void ofxShapeBatchRenderer::clear()
 {
-	for(int i = 0; i < numLayers; i++) numObjects[i] = 0;
+    for(int i = 0; i < numLayers; i++) {
+        numObjects[i] = 0;
+		#if defined(USING_VBO)
+			meshes[i]->clear();
+		#endif
+    }
+    
 }
 
 void ofxShapeBatchRenderer::draw()
 {
-	if(safeMode)
-	{
-		glEnableClientState(GL_VERTEX_ARRAY);
-		glEnableClientState(GL_COLOR_ARRAY);
-	}
-	
-	glVertexPointer(3, GL_FLOAT, 0, &verts[0]);
-	glColorPointer(4, GL_UNSIGNED_BYTE, 0, &colors[0]);
-	
-	for(int l = 0; l < numLayers; l++)
-	{
-		if(numObjects[l] > 0)
-		{
-			glLineWidth(layerLineWidth[l]);
-			
-			if(shapeMode == SBR_LINE)
-				glDrawArrays(GL_LINES, l*numObjectsPerLayer*shapeMode, numObjects[l]*shapeMode);
-			else if(shapeMode == SBR_TRIANGLE)
-				glDrawArrays(GL_TRIANGLES, l*numObjectsPerLayer*shapeMode, numObjects[l]*shapeMode);
-		}
-		//cout<<"layer: "<<l<<" startIndex: "<<l*numObjectsPerLayer*(shapeMode*3)<<endl;
-	}
-	
-	if(safeMode)
-	{
-		glDisableClientState(GL_COLOR_ARRAY);
-		glDisableClientState(GL_VERTEX_ARRAY);
-	}
+	#if defined(USING_VBO)
+    	for(int l = 0; l < numLayers; l++)
+	    {
+	        if(numObjects[l] > 0)
+	        {
+		#if defined(USE_DRAW_INSTANCED)
+		            meshes[l]->drawInstanced(OF_MESH_FILL, numObjects[l]*shapeMode);
+		#else
+		            meshes[l]->draw(OF_MESH_FILL);
+		#endif
+	        }
+	        numObjectsLast[l]=numObjects[l];
+	    }
+	#else // not using vbo
+    
+	    if(safeMode)
+	    {
+	        glEnableClientState(GL_VERTEX_ARRAY);
+	        glEnableClientState(GL_COLOR_ARRAY);
+	    }
+
+	    glVertexPointer(3, GL_FLOAT, 0, &verts[0]);
+	    glColorPointer(4, GL_UNSIGNED_BYTE, 0, &colors[0]);
+
+	   for(int l = 0; l < numLayers; l++)
+	   {
+	       if(numObjects[l] > 0)
+	        {
+	            
+	            glLineWidth(layerLineWidth[l]);
+
+	            if(shapeMode == SBR_LINE)
+	                glDrawArrays(GL_LINES, l*numObjectsPerLayer*shapeMode, numObjects[l]*shapeMode);
+	            else if(shapeMode == SBR_TRIANGLE)
+	                glDrawArrays(GL_TRIANGLES, l*numObjectsPerLayer*shapeMode, numObjects[l]*shapeMode);
+	        }
+	//        //cout<<"layer: "<<l<<" startIndex: "<<l*numObjectsPerLayer*(shapeMode*3)<<endl;
+	    }
+
+	    if(safeMode)
+	    {
+	        glDisableClientState(GL_COLOR_ARRAY);
+	        glDisableClientState(GL_VERTEX_ARRAY);
+	    }
+	#endif
+    
 }
 
 void ofxShapeBatchRenderer::setColor(int r, int g, int b, int a)
